@@ -1,0 +1,9 @@
+spring:
+  application:
+    name: oracle-mcp-server-test
+
+oracle:
+  connection:
+    string: jdbc:oracle:thin:@{ip}:{port}:{database}
+    username: {username}
+    password: {password}
