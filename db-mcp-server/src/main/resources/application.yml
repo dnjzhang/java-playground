@@ -9,5 +9,5 @@ spring:
         enabled: true
 oracle:
   connection-string: jdbc:oracle:thin:@127.0.0.1:1521:ORCLCDB
-  username: OCI_PLATFORM
-  password: OCI_PLATFORM
+  username: ${DB_USERNAME}
+  password: ${DB_PASSWORD}
