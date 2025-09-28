@@ -22,7 +22,6 @@ public class OracleMcpServerApplication {
      * Main method to start the application
      * 
      * @param args command line arguments
-     * @author yue9527
      */
     public static void main(String[] args) {
         SpringApplication.run(OracleMcpServerApplication.class, args);
