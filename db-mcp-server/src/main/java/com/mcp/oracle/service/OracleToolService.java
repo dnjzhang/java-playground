@@ -1,10 +1,17 @@
 package com.mcp.oracle.service;
 
+import java.io.Reader;
+import java.sql.Clob;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
+
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -39,7 +46,6 @@ public class OracleToolService {
      * 
      * @return OracleConnection instance
      * @throws Exception if connection fails
-     * @author yue9527
      */
     private OracleConnection getConnection() throws Exception {
         OracleDataSource ds = new OracleDataSource();
@@ -50,11 +56,11 @@ public class OracleToolService {
     }
 
     /**
-     * Get a list of all tables in Oracle database
-     * Returns a newline-separated list of table names
+     * Get a list of all tables in Oracle database.
+     * Returns a Markdown formatted summary that is easy for humans to scan and
+     * simple for LLMs to parse.
      * 
-     * @return String containing list of table names
-     * @author yue9527
+     * @return String containing a Markdown table with table names
      */
     @Tool(name = "list_tables", description = "Get a list of all tables in Oracle database")
     public String listTables() {
@@ -67,8 +73,25 @@ public class OracleToolService {
                 tables.add(rs.getString(1));
             }
 
-            return tables.stream()
-                    .collect(Collectors.joining("\n"));
+            if (tables.isEmpty()) {
+                return "Tables found: 0\n\nNo tables available for the current schema.";
+            }
+
+            StringBuilder result = new StringBuilder();
+            result.append("Tables found: ").append(tables.size()).append("\n\n");
+            result.append("| # | Table Name |\n");
+            result.append("|---|------------|\n");
+
+            for (int i = 0; i < tables.size(); i++) {
+                String tableName = tables.get(i).replace("|", "\\|").trim();
+                result.append("| ")
+                        .append(i + 1)
+                        .append(" | ")
+                        .append(tableName.isEmpty() ? "(unnamed table)" : tableName)
+                        .append(" |\n");
+            }
+
+            return result.toString();
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
@@ -81,7 +104,6 @@ public class OracleToolService {
      * 
      * @param tableName name of the table to describe
      * @return String containing table structure in CSV format
-     * @author yue9527
      */
     @Tool(name = "describe_table", description = "Get structure information of specified table in Oracle database")
     public String describeTable(@ToolParam(description = "Table name to describe") String tableName) {
@@ -134,7 +156,6 @@ public class OracleToolService {
      * 
      * @param sql SQL statement to execute
      * @return String containing query results or affected rows count
-     * @author yue9527
      */
     @Tool(name = "execute_sql", description = "Execute Oracle SQL statement")
     public String executeSql(@ToolParam(description = "SQL statement to execute") String sql) {
@@ -161,7 +182,7 @@ public class OracleToolService {
                             if (i > 1)
                                 result.append(",");
                             Object value = rs.getObject(i);
-                            result.append(value != null ? value.toString() : "NULL");
+                            result.append(formatResultValue(value));
                         }
                         result.append("\n");
                     }
@@ -179,6 +200,128 @@ public class OracleToolService {
             }
         } catch (Exception e) {
             return "Error: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Search the LOG table for entries created within the provided ISO8601 time
+     * range.
+     * 
+     * @param startIso inclusive start timestamp in ISO8601 format
+     * @param endIso   inclusive end timestamp in ISO8601 format
+     * @return CSV formatted rows describing the matching log entries
+     */
+    @Tool(name = "search_log", description = "Search LOG table entries within a time range")
+    public String searchLog(
+            @ToolParam(description = "Inclusive start timestamp in ISO8601 format") String startIso,
+            @ToolParam(description = "Inclusive end timestamp in ISO8601 format") String endIso) {
+
+        try {
+            Timestamp start = parseIsoTimestamp(startIso);
+            Timestamp end = parseIsoTimestamp(endIso);
+
+            if (start.after(end)) {
+                return "Error: start time must be before or equal to end time.";
+            }
+
+            String sql = "SELECT ID, COMP_TYPE_ID, COMP_ID, COMP_UID, CREATED, LOG_LEVEL_ID, LOG_CATEGORY_ID, "
+                    + "LOG_SUB_CATEGORY, ENTRY, USER_DEF_ID, EXECUTION_CONTEXT, LOG_ERROR_CATEGORY_ID, LOG_CODE, "
+                    + "API_CONTEXT FROM LOG WHERE CREATED BETWEEN ? AND ? ORDER BY CREATED";
+
+            try (OracleConnection conn = getConnection();
+                    PreparedStatement ps = conn.prepareStatement(sql)) {
+
+                ps.setTimestamp(1, start);
+                ps.setTimestamp(2, end);
+
+                try (ResultSet rs = ps.executeQuery()) {
+                    int columnCount = rs.getMetaData().getColumnCount();
+                    StringBuilder headerBuilder = new StringBuilder();
+                    for (int i = 1; i <= columnCount; i++) {
+                        if (i > 1) {
+                            headerBuilder.append(",");
+                        }
+                        headerBuilder.append(rs.getMetaData().getColumnName(i));
+                    }
+
+                    List<String> rows = new ArrayList<>();
+                    while (rs.next()) {
+                        StringBuilder row = new StringBuilder();
+                        for (int i = 1; i <= columnCount; i++) {
+                            if (i > 1) {
+                                row.append(",");
+                            }
+                            Object value = rs.getObject(i);
+                            row.append(formatResultValue(value));
+                        }
+                        rows.add(row.toString());
+                    }
+
+                    if (rows.isEmpty()) {
+                        return String.format(
+                                "Log entries: 0\n\nNo log records found between %s and %s.", startIso, endIso);
+                    }
+
+                    StringBuilder result = new StringBuilder();
+                    result.append("Log entries: ").append(rows.size())
+                            .append(" between ").append(startIso).append(" and ").append(endIso).append("\n\n");
+                    result.append(headerBuilder).append("\n");
+                    for (String row : rows) {
+                        result.append(row).append("\n");
+                    }
+                    return result.toString();
+                }
+            }
+        } catch (IllegalArgumentException | DateTimeParseException e) {
+            return "Error: Invalid timestamp format - " + e.getMessage();
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    private String formatResultValue(Object value) {
+        if (value == null) {
+            return "NULL";
+        }
+
+        if (value instanceof Clob) {
+            return readClob((Clob) value);
+        }
+
+        return value.toString();
+    }
+
+    private String readClob(Clob clob) {
+        if (clob == null) {
+            return "NULL";
+        }
+
+        try (Reader reader = clob.getCharacterStream()) {
+            StringBuilder builder = new StringBuilder();
+            char[] buffer = new char[2048];
+            int read;
+            while ((read = reader.read(buffer)) != -1) {
+                builder.append(buffer, 0, read);
+            }
+            return builder.toString();
+        } catch (Exception e) {
+            return "<CLOB read error: " + e.getMessage() + ">";
+        }
+    }
+
+    private Timestamp parseIsoTimestamp(String isoTimestamp) {
+        if (isoTimestamp == null || isoTimestamp.trim().isEmpty()) {
+            throw new IllegalArgumentException("Timestamp value is required");
+        }
+
+        String trimmed = isoTimestamp.trim();
+
+        try {
+            OffsetDateTime odt = OffsetDateTime.parse(trimmed);
+            return Timestamp.from(odt.toInstant());
+        } catch (DateTimeParseException ex) {
+            LocalDateTime ldt = LocalDateTime.parse(trimmed);
+            return Timestamp.valueOf(ldt);
         }
     }
 
