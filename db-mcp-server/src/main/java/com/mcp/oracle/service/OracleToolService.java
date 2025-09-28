@@ -39,6 +39,7 @@ public class OracleToolService {
      * 
      * @return OracleConnection instance
      * @throws Exception if connection fails
+     * @author yue9527
      */
     private OracleConnection getConnection() throws Exception {
         OracleDataSource ds = new OracleDataSource();
@@ -53,6 +54,7 @@ public class OracleToolService {
      * Returns a newline-separated list of table names
      * 
      * @return String containing list of table names
+     * @author yue9527
      */
     @Tool(name = "list_tables", description = "Get a list of all tables in Oracle database")
     public String listTables() {
@@ -79,6 +81,7 @@ public class OracleToolService {
      * 
      * @param tableName name of the table to describe
      * @return String containing table structure in CSV format
+     * @author yue9527
      */
     @Tool(name = "describe_table", description = "Get structure information of specified table in Oracle database")
     public String describeTable(@ToolParam(description = "Table name to describe") String tableName) {
@@ -131,6 +134,7 @@ public class OracleToolService {
      * 
      * @param sql SQL statement to execute
      * @return String containing query results or affected rows count
+     * @author yue9527
      */
     @Tool(name = "execute_sql", description = "Execute Oracle SQL statement")
     public String executeSql(@ToolParam(description = "SQL statement to execute") String sql) {
