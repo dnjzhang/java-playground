@@ -3,7 +3,6 @@ spring:
     name: oracle-mcp-server-test
 
 oracle:
-  connection:
-    string: jdbc:oracle:thin:@{ip}:{port}:{database}
-    username: {username}
-    password: {password}
+  connection-string: jdbc:oracle:thin:@127.0.0.1:1521:ORCLCDB
+  username: ${DB_USERNAME}
+  password: ${DB_PASSWORD}

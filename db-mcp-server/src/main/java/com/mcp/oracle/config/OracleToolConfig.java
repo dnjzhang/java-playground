@@ -7,7 +7,6 @@ import lombok.Data;
 /**
  * Oracle database configuration class
  * 
- * @author yue9527
  */
 @Configuration
 @ConfigurationProperties(prefix = "oracle")

@@ -13,7 +13,6 @@ import com.mcp.oracle.service.OracleToolService;
  * Oracle MCP Server Application
  * Main entry point for the Oracle MCP server application
  * 
- * @author yue9527
  */
 @SpringBootApplication
 @EnableConfigurationProperties

@@ -19,7 +19,6 @@ import oracle.jdbc.pool.OracleDataSource;
  * Oracle database service implementation
  * Provides methods for interacting with Oracle database
  * 
- * @author yue9527
  */
 @Service
 public class OracleToolService {

@@ -14,8 +14,6 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Test class for OracleService
  * Contains unit tests for all OracleService methods
- * 
- * @author yue9527
  */
 @SpringBootTest
 @ActiveProfiles("test")
