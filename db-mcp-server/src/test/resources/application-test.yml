@@ -4,5 +4,5 @@ spring:
 
 oracle:
   connection-string: jdbc:oracle:thin:@127.0.0.1:1521:ORCLCDB
-  username: ${DB_USERNAME}
-  password: ${DB_PASSWORD}
+  username: ${ORACLE_USERNAME}
+  password: ${ORACLE_PASSWORD}

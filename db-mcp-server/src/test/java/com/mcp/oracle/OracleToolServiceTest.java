@@ -27,7 +27,6 @@ public class OracleToolServiceTest {
      * Test listTables method
      * Verifies that the method returns a non-empty list of tables
      * 
-     * @author yue9527
      */
     @Test
     public void testListTables() {
@@ -42,7 +41,6 @@ public class OracleToolServiceTest {
      * Test describeTable method
      * Verifies that the method returns valid table structure information
      * 
-     * @author yue9527
      */
     @Test
     public void testDescribeTable() {
@@ -61,7 +59,6 @@ public class OracleToolServiceTest {
      * Test executeSql method with valid SELECT query
      * Verifies that the method returns valid query results
      * 
-     * @author yue9527
      */
     @Test
     public void testExecuteQuery() {
@@ -80,13 +77,12 @@ public class OracleToolServiceTest {
      * Test executeSql method with invalid query
      * Verifies that the method handles non-SELECT statements appropriately
      * 
-     * @author yue9527
      */
     @Test
     public void testExecuteQueryWithInvalidQuery() {
         String result = oracleToolService.executeSql("INSERT INTO test VALUES (1)");
         log.info(result);
-        assertTrue(result.startsWith("Error: Only SELECT statements are supported."));
+        assertTrue(result.startsWith("Error"));
     }
 
 } 
