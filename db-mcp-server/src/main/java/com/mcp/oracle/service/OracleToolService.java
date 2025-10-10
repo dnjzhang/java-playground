@@ -11,6 +11,7 @@ import java.util.List;
 
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 
 import org.springframework.ai.tool.annotation.Tool;
@@ -204,76 +205,90 @@ public class OracleToolService {
     }
 
     /**
-     * Search the LOG table for entries created within the provided ISO8601 time
-     * range.
-     * 
-     * @param startIso inclusive start timestamp in ISO8601 format
-     * @param endIso   inclusive end timestamp in ISO8601 format
-     * @return CSV formatted rows describing the matching log entries
+     * Retrieve the most recent LOG entries for a component identifier that were created before the provided timestamp.
+     * Results are ordered from newest to oldest.
+     *
+     * @param compId     component identifier to search
+     * @param beforeIso  exclusive upper bound timestamp in ISO8601 format
+     * @param maxRecords maximum number of records to return; negative values return all matches
+     * @return pretty-printed JSON containing the matching log entries
      */
-    @Tool(name = "search_log", description = "Search LOG table entries within a time range")
-    public String searchLog(
-            @ToolParam(description = "Inclusive start timestamp in ISO8601 format") String startIso,
-            @ToolParam(description = "Inclusive end timestamp in ISO8601 format") String endIso) {
+    @Tool(name = "retrieve_log", description = "Retrieve LOG entries before a timestamp for a component identifier")
+    public String retrieveLog(
+            @ToolParam(description = "Component identifier to search") String compId,
+            @ToolParam(description = "Exclusive upper bound timestamp (ISO8601)") String beforeIso,
+            @ToolParam(description = "Maximum number of records to return; negative for all") int maxRecords) {
+
+        if (compId == null || compId.trim().isEmpty()) {
+            return "Error: comp_id is required.";
+        }
 
         try {
-            Timestamp start = parseIsoTimestamp(startIso);
-            Timestamp end = parseIsoTimestamp(endIso);
+            Timestamp before = parseIsoTimestamp(beforeIso);
 
-            if (start.after(end)) {
-                return "Error: start time must be before or equal to end time.";
-            }
-
-            String sql = "SELECT ID, COMP_TYPE_ID, COMP_ID, COMP_UID, CREATED, LOG_LEVEL_ID, LOG_CATEGORY_ID, "
+            String baseSql = "SELECT ID, COMP_TYPE_ID, COMP_ID, COMP_UID, CREATED, LOG_LEVEL_ID, LOG_CATEGORY_ID, "
                     + "LOG_SUB_CATEGORY, ENTRY, USER_DEF_ID, EXECUTION_CONTEXT, LOG_ERROR_CATEGORY_ID, LOG_CODE, "
-                    + "API_CONTEXT FROM LOG WHERE CREATED BETWEEN ? AND ? ORDER BY CREATED";
+                    + "API_CONTEXT FROM LOG WHERE COMP_ID = ? AND CREATED < ? ORDER BY CREATED DESC, ID DESC";
+
+            String sql = maxRecords < 0
+                    ? baseSql
+                    : "SELECT * FROM (" + baseSql + ") WHERE ROWNUM <= ?";
 
             try (OracleConnection conn = getConnection();
                     PreparedStatement ps = conn.prepareStatement(sql)) {
 
-                ps.setTimestamp(1, start);
-                ps.setTimestamp(2, end);
+                ps.setString(1, compId.trim());
+                ps.setTimestamp(2, before);
+                if (maxRecords >= 0) {
+                    ps.setInt(3, maxRecords);
+                }
 
                 try (ResultSet rs = ps.executeQuery()) {
-                    int columnCount = rs.getMetaData().getColumnCount();
-                    StringBuilder headerBuilder = new StringBuilder();
-                    for (int i = 1; i <= columnCount; i++) {
-                        if (i > 1) {
-                            headerBuilder.append(",");
-                        }
-                        headerBuilder.append(rs.getMetaData().getColumnName(i));
-                    }
-
-                    List<String> rows = new ArrayList<>();
+                    List<LogRecord> records = new ArrayList<>();
                     while (rs.next()) {
-                        StringBuilder row = new StringBuilder();
-                        for (int i = 1; i <= columnCount; i++) {
-                            if (i > 1) {
-                                row.append(",");
-                            }
-                            Object value = rs.getObject(i);
-                            row.append(formatResultValue(value));
-                        }
-                        rows.add(row.toString());
+                        records.add(mapLogRecord(rs));
                     }
 
-                    if (rows.isEmpty()) {
-                        return String.format(
-                                "Log entries: 0\n\nNo log records found between %s and %s.", startIso, endIso);
-                    }
-
-                    StringBuilder result = new StringBuilder();
-                    result.append("Log entries: ").append(rows.size())
-                            .append(" between ").append(startIso).append(" and ").append(endIso).append("\n\n");
-                    result.append(headerBuilder).append("\n");
-                    for (String row : rows) {
-                        result.append(row).append("\n");
-                    }
-                    return result.toString();
+                    return formatLogRecordsJson(compId.trim(), before, maxRecords, records);
                 }
             }
         } catch (IllegalArgumentException | DateTimeParseException e) {
             return "Error: Invalid timestamp format - " + e.getMessage();
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Summarize LOG table entries for a specific component identifier by returning the first and last rows found.
+     *
+     * @param compId component identifier to summarize
+     * @return JSON summary containing entry counts and first/last timestamps
+     */
+    @Tool(name = "summarize_log", description = "Summarize LOG entries for a component identifier")
+    public String summarizeLog(
+            @ToolParam(description = "Component identifier to summarize") String compId) {
+
+        if (compId == null || compId.trim().isEmpty()) {
+            return "Error: comp_id is required.";
+        }
+
+        String trimmedCompId = compId.trim();
+
+        try (OracleConnection conn = getConnection()) {
+            long totalEntries = fetchLogCount(conn, trimmedCompId);
+            LogEntrySummary firstEntry = totalEntries > 0 ? fetchLogEntry(conn, trimmedCompId, true) : null;
+            LogEntrySummary lastEntry = totalEntries > 0 ? fetchLogEntry(conn, trimmedCompId, false) : null;
+
+            StringBuilder json = new StringBuilder();
+            json.append("{");
+            json.append("\"compId\":\"").append(jsonEscape(trimmedCompId)).append("\",");
+            json.append("\"totalEntries\":").append(totalEntries).append(",");
+            json.append("\"firstEntry\":").append(entryToJson(firstEntry)).append(",");
+            json.append("\"lastEntry\":").append(entryToJson(lastEntry));
+            json.append("}");
+
+            return json.toString();
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
@@ -325,4 +340,206 @@ public class OracleToolService {
         }
     }
 
+    private long fetchLogCount(OracleConnection conn, String compId) throws Exception {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT COUNT(*) FROM LOG WHERE COMP_ID = ?")) {
+            ps.setString(1, compId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
+        }
+        return 0;
+    }
+
+    private LogEntrySummary fetchLogEntry(OracleConnection conn, String compId, boolean first) throws Exception {
+        String orderClause = first ? "ASC" : "DESC";
+        String sql = "SELECT ID, COMP_ID, CREATED, ENTRY FROM ("
+                + "SELECT ID, COMP_ID, CREATED, ENTRY FROM LOG WHERE COMP_ID = ? ORDER BY CREATED " + orderClause
+                + ", ID " + orderClause
+                + ") WHERE ROWNUM = 1";
+
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, compId);
+
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    LogEntrySummary summary = new LogEntrySummary();
+                    summary.id = rs.getLong("ID");
+                    if (rs.wasNull()) {
+                        summary.id = null;
+                    }
+                    summary.created = rs.getTimestamp("CREATED");
+                    summary.entry = rs.getString("ENTRY");
+                    return summary;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private String entryToJson(LogEntrySummary entry) {
+        if (entry == null) {
+            return "null";
+        }
+
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"id\":").append(entry.id == null ? "null" : entry.id.toString()).append(",");
+
+        String createdIso = toIsoString(entry.created);
+        Long createdUnix = toUnixMillis(entry.created);
+        if (createdIso == null) {
+            json.append("\"createdIso\":null,");
+            json.append("\"createdUnixMs\":null,");
+        } else {
+            json.append("\"createdIso\":\"").append(jsonEscape(createdIso)).append("\",");
+            json.append("\"createdUnixMs\":").append(createdUnix);
+            json.append(",");
+        }
+
+        String entryText = entry.entry == null ? null : jsonEscape(entry.entry);
+        json.append("\"entry\":").append(entryText == null ? "null" : "\"" + entryText + "\"");
+        json.append("}");
+
+        return json.toString();
+    }
+
+    private LogRecord mapLogRecord(ResultSet rs) throws Exception {
+        LogRecord record = new LogRecord();
+        record.id = getNullableLong(rs, "ID");
+        record.compTypeId = getNullableLong(rs, "COMP_TYPE_ID");
+        record.compId = rs.getString("COMP_ID");
+        record.compUid = rs.getString("COMP_UID");
+        record.created = rs.getTimestamp("CREATED");
+        record.logLevelId = getNullableLong(rs, "LOG_LEVEL_ID");
+        record.logCategoryId = getNullableLong(rs, "LOG_CATEGORY_ID");
+        record.logSubCategory = rs.getString("LOG_SUB_CATEGORY");
+        record.entry = rs.getString("ENTRY");
+        record.userDefId = getNullableLong(rs, "USER_DEF_ID");
+        record.executionContext = rs.getString("EXECUTION_CONTEXT");
+        record.logErrorCategoryId = getNullableLong(rs, "LOG_ERROR_CATEGORY_ID");
+        record.logCode = getNullableLong(rs, "LOG_CODE");
+        record.apiContext = rs.getString("API_CONTEXT");
+        return record;
+    }
+
+    private Long getNullableLong(ResultSet rs, String column) throws Exception {
+        long value = rs.getLong(column);
+        return rs.wasNull() ? null : value;
+    }
+
+    private String formatLogRecordsJson(String compId, Timestamp before, int maxRecords, List<LogRecord> records) {
+        StringBuilder json = new StringBuilder();
+        json.append("{\n");
+        json.append("  \"compId\": \"").append(jsonEscape(compId)).append("\",\n");
+        json.append("  \"beforeIso\": \"").append(jsonEscape(toIsoString(before))).append("\",\n");
+        json.append("  \"beforeUnixMs\": ").append(before == null ? "null" : toUnixMillis(before)).append(",\n");
+        json.append("  \"maxRecords\": ").append(maxRecords).append(",\n");
+        json.append("  \"returnedCount\": ").append(records.size()).append(",\n");
+        json.append("  \"records\": [\n");
+
+        for (int i = 0; i < records.size(); i++) {
+            LogRecord record = records.get(i);
+            json.append("    {\n");
+            json.append("      \"id\": ").append(record.id == null ? "null" : record.id.toString()).append(",\n");
+            json.append("      \"compTypeId\": ").append(record.compTypeId == null ? "null" : record.compTypeId.toString()).append(",\n");
+            json.append("      \"compId\": ").append(record.compId == null ? "null" : "\"" + jsonEscape(record.compId) + "\"").append(",\n");
+            json.append("      \"compUid\": ").append(record.compUid == null ? "null" : "\"" + jsonEscape(record.compUid) + "\"").append(",\n");
+            json.append("      \"createdIso\": ").append(record.created == null ? "null" : "\"" + jsonEscape(toIsoString(record.created)) + "\"").append(",\n");
+            json.append("      \"createdUnixMs\": ").append(record.created == null ? "null" : toUnixMillis(record.created)).append(",\n");
+            json.append("      \"logLevelId\": ").append(record.logLevelId == null ? "null" : record.logLevelId.toString()).append(",\n");
+            json.append("      \"logCategoryId\": ").append(record.logCategoryId == null ? "null" : record.logCategoryId.toString()).append(",\n");
+            json.append("      \"logSubCategory\": ").append(record.logSubCategory == null ? "null" : "\"" + jsonEscape(record.logSubCategory) + "\"").append(",\n");
+            json.append("      \"entry\": ").append(record.entry == null ? "null" : "\"" + jsonEscape(record.entry) + "\"").append(",\n");
+            json.append("      \"userDefId\": ").append(record.userDefId == null ? "null" : record.userDefId.toString()).append(",\n");
+            json.append("      \"executionContext\": ").append(record.executionContext == null ? "null" : "\"" + jsonEscape(record.executionContext) + "\"").append(",\n");
+            json.append("      \"logErrorCategoryId\": ").append(record.logErrorCategoryId == null ? "null" : record.logErrorCategoryId.toString()).append(",\n");
+            json.append("      \"logCode\": ").append(record.logCode == null ? "null" : record.logCode.toString()).append(",\n");
+            json.append("      \"apiContext\": ").append(record.apiContext == null ? "null" : "\"" + jsonEscape(record.apiContext) + "\"").append("\n");
+            json.append("    }");
+            if (i < records.size() - 1) {
+                json.append(",");
+            }
+            json.append("\n");
+        }
+
+        json.append("  ]\n");
+        json.append("}");
+
+        return json.toString();
+    }
+
+    private String jsonEscape(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        StringBuilder escaped = new StringBuilder();
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '\\':
+                    escaped.append("\\\\");
+                    break;
+                case '"':
+                    escaped.append("\\\"");
+                    break;
+                case '\n':
+                    escaped.append("\\n");
+                    break;
+                case '\r':
+                    escaped.append("\\r");
+                    break;
+                case '\t':
+                    escaped.append("\\t");
+                    break;
+                default:
+                    if (c < 0x20) {
+                        escaped.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        escaped.append(c);
+                    }
+            }
+        }
+        return escaped.toString();
+    }
+
+    private String toIsoString(Timestamp timestamp) {
+        if (timestamp == null) {
+            return null;
+        }
+        return timestamp.toInstant().atOffset(ZoneOffset.UTC).toString();
+    }
+
+    private Long toUnixMillis(Timestamp timestamp) {
+        if (timestamp == null) {
+            return null;
+        }
+        return timestamp.toInstant().toEpochMilli();
+    }
+
+    private static class LogEntrySummary {
+        Long id;
+        Timestamp created;
+        String entry;
+    }
+
+    private static class LogRecord {
+        Long id;
+        Long compTypeId;
+        String compId;
+        String compUid;
+        Timestamp created;
+        Long logLevelId;
+        Long logCategoryId;
+        String logSubCategory;
+        String entry;
+        Long userDefId;
+        String executionContext;
+        Long logErrorCategoryId;
+        Long logCode;
+        String apiContext;
+    }
 }
