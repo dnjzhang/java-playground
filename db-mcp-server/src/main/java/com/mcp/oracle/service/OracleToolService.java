@@ -6,13 +6,17 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.sql.Timestamp;
-import java.util.ArrayList;
-import java.util.List;
-
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -58,10 +62,9 @@ public class OracleToolService {
 
     /**
      * Get a list of all tables in Oracle database.
-     * Returns a Markdown formatted summary that is easy for humans to scan and
-     * simple for LLMs to parse.
-     * 
-     * @return String containing a Markdown table with table names
+     * Returns pretty-printed JSON containing the table count and table names.
+     *
+     * @return JSON string describing available tables
      */
     @Tool(name = "list_tables", description = "Get a list of all tables in Oracle database")
     public String listTables() {
@@ -74,78 +77,142 @@ public class OracleToolService {
                 tables.add(rs.getString(1));
             }
 
-            if (tables.isEmpty()) {
-                return "Tables found: 0\n\nNo tables available for the current schema.";
-            }
-
-            StringBuilder result = new StringBuilder();
-            result.append("Tables found: ").append(tables.size()).append("\n\n");
-            result.append("| # | Table Name |\n");
-            result.append("|---|------------|\n");
+            StringBuilder json = new StringBuilder();
+            json.append("{\n");
+            json.append("  \"tableCount\": ").append(tables.size()).append(",\n");
+            json.append("  \"tables\": [\n");
 
             for (int i = 0; i < tables.size(); i++) {
-                String tableName = tables.get(i).replace("|", "\\|").trim();
-                result.append("| ")
-                        .append(i + 1)
-                        .append(" | ")
-                        .append(tableName.isEmpty() ? "(unnamed table)" : tableName)
-                        .append(" |\n");
+                String tableName = tables.get(i);
+                json.append("    ");
+                if (tableName == null) {
+                    json.append("null");
+                } else {
+                    String safeName = tableName.trim();
+                    if (safeName.isEmpty()) {
+                        safeName = "(unnamed table)";
+                    }
+                    json.append("\"").append(jsonEscape(safeName)).append("\"");
+                }
+
+                if (i < tables.size() - 1) {
+                    json.append(",");
+                }
+                json.append("\n");
             }
 
-            return result.toString();
+            json.append("  ]\n");
+            json.append("}");
+
+            return json.toString();
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
     }
 
     /**
-     * Get structure information of specified table in Oracle database
-     * Returns table structure in CSV format including column names, data types, and
-     * constraints
-     * 
+     * Get structure information of specified table in Oracle database.
+     * Returns pretty-printed JSON describing each column and primary key metadata.
+     *
      * @param tableName name of the table to describe
-     * @return String containing table structure in CSV format
+     * @return JSON string containing column metadata
      */
     @Tool(name = "describe_table", description = "Get structure information of specified table in Oracle database")
     public String describeTable(@ToolParam(description = "Table name to describe") String tableName) {
-        try (OracleConnection conn = getConnection();
-                Statement stmt = conn.createStatement()) {
+        if (tableName == null || tableName.trim().isEmpty()) {
+            return "Error: table name is required.";
+        }
 
-            StringBuilder result = new StringBuilder();
-            result.append("COLUMN_NAME,DATA_TYPE,NULLABLE,DATA_LENGTH,PRIMARY_KEY\n");
+        String trimmedTable = tableName.trim();
+        String upperTable = trimmedTable.toUpperCase();
 
-            // Get primary keys
-            List<String> pkColumns = new ArrayList<>();
-            try (ResultSet rs = stmt.executeQuery(
-                    "SELECT cols.column_name FROM all_constraints cons, all_cons_columns cols " +
-                            "WHERE cons.constraint_type = 'P' AND cons.constraint_name = cols.constraint_name " +
-                            "AND cons.owner = cols.owner AND cols.table_name = '" + tableName.toUpperCase() + "'")) {
+        try (OracleConnection conn = getConnection()) {
+            List<String> pkColumnOrder = new ArrayList<>();
+            Set<String> pkColumns = new HashSet<>();
 
-                while (rs.next()) {
-                    pkColumns.add(rs.getString(1));
+            try (PreparedStatement pkStmt = conn.prepareStatement(
+                    "SELECT cols.column_name FROM all_constraints cons, all_cons_columns cols "
+                            + "WHERE cons.constraint_type = 'P' AND cons.constraint_name = cols.constraint_name "
+                            + "AND cons.owner = cols.owner AND cols.table_name = ?")) {
+                pkStmt.setString(1, upperTable);
+
+                try (ResultSet rs = pkStmt.executeQuery()) {
+                    while (rs.next()) {
+                        String pk = rs.getString(1);
+                        if (pk != null) {
+                            pkColumnOrder.add(pk);
+                            pkColumns.add(pk.toUpperCase());
+                        }
+                    }
                 }
             }
 
-            // Get column info
-            try (ResultSet rs = stmt.executeQuery(
-                    "SELECT column_name, data_type, nullable, data_length " +
-                            "FROM user_tab_columns WHERE table_name = '" + tableName.toUpperCase() + "' " +
-                            "ORDER BY column_id")) {
+            List<ColumnDetail> columns = new ArrayList<>();
+            try (PreparedStatement columnStmt = conn.prepareStatement(
+                    "SELECT column_name, data_type, nullable, data_length "
+                            + "FROM user_tab_columns WHERE table_name = ? ORDER BY column_id")) {
+                columnStmt.setString(1, upperTable);
 
-                while (rs.next()) {
-                    String colName = rs.getString(1);
-                    result.append(String.format("%s,%s,%s,%d,%s\n",
-                            colName,
-                            rs.getString(2),
-                            rs.getString(3),
-                            rs.getInt(4),
-                            pkColumns.contains(colName) ? "YES" : "NO"));
+                try (ResultSet rs = columnStmt.executeQuery()) {
+                    while (rs.next()) {
+                        ColumnDetail detail = new ColumnDetail();
+                        detail.name = rs.getString("COLUMN_NAME");
+                        detail.dataType = rs.getString("DATA_TYPE");
+
+                        String nullableFlag = rs.getString("NULLABLE");
+                        detail.nullable = nullableFlag != null && nullableFlag.equalsIgnoreCase("Y");
+
+                        int length = rs.getInt("DATA_LENGTH");
+                        detail.dataLength = rs.wasNull() ? null : Integer.valueOf(length);
+
+                        String normalizedName = detail.name == null ? null : detail.name.toUpperCase();
+                        detail.primaryKey = normalizedName != null && pkColumns.contains(normalizedName);
+
+                        columns.add(detail);
+                    }
                 }
             }
 
-            return result.toString();
+            StringBuilder json = new StringBuilder();
+            json.append("{\n");
+            json.append("  \"table\": \"").append(jsonEscape(trimmedTable)).append("\",\n");
+            json.append("  \"tableUpper\": \"").append(jsonEscape(upperTable)).append("\",\n");
+            json.append("  \"found\": ").append(columns.isEmpty() ? "false" : "true").append(",\n");
+            json.append("  \"primaryKeyColumns\": [\n");
+
+            for (int i = 0; i < pkColumnOrder.size(); i++) {
+                String pk = pkColumnOrder.get(i);
+                json.append("    \"").append(jsonEscape(pk)).append("\"");
+                if (i < pkColumnOrder.size() - 1) {
+                    json.append(",");
+                }
+                json.append("\n");
+            }
+
+            json.append("  ],\n");
+            json.append("  \"columnCount\": ").append(columns.size()).append(",\n");
+            json.append("  \"columns\": [\n");
+
+            for (int i = 0; i < columns.size(); i++) {
+                ColumnDetail detail = columns.get(i);
+                json.append("    {\n");
+                json.append("      \"name\": ").append(detail.name == null ? "null" : "\"" + jsonEscape(detail.name) + "\"").append(",\n");
+                json.append("      \"dataType\": ").append(detail.dataType == null ? "null" : "\"" + jsonEscape(detail.dataType) + "\"").append(",\n");
+                json.append("      \"nullable\": ").append(detail.nullable ? "true" : "false").append(",\n");
+                json.append("      \"dataLength\": ").append(detail.dataLength == null ? "null" : detail.dataLength.toString()).append(",\n");
+                json.append("      \"primaryKey\": ").append(detail.primaryKey ? "true" : "false").append("\n");
+                json.append("    }");
+                if (i < columns.size() - 1) {
+                    json.append(",");
+                }
+                json.append("\n");
+            }
+
+            json.append("  ]\n");
+            json.append("}");
+
+            return json.toString();
         } catch (Exception e) {
-            e.printStackTrace();
             return "Error: " + e.getMessage();
         }
     }
@@ -243,14 +310,16 @@ public class OracleToolService {
                     ps.setInt(3, maxRecords);
                 }
 
+                List<LogRecord> records = new ArrayList<>();
                 try (ResultSet rs = ps.executeQuery()) {
-                    List<LogRecord> records = new ArrayList<>();
                     while (rs.next()) {
                         records.add(mapLogRecord(rs));
                     }
-
-                    return formatLogRecordsJson(compId.trim(), before, maxRecords, records);
                 }
+
+                populateLogCategoryNames(conn, records);
+
+                return formatLogRecordsJson(compId.trim(), before, maxRecords, records);
             }
         } catch (IllegalArgumentException | DateTimeParseException e) {
             return "Error: Invalid timestamp format - " + e.getMessage();
@@ -425,6 +494,39 @@ public class OracleToolService {
         return record;
     }
 
+    private void populateLogCategoryNames(OracleConnection conn, List<LogRecord> records) throws Exception {
+        if (records.isEmpty()) {
+            return;
+        }
+
+        Map<Long, String> cache = new HashMap<>();
+
+        try (PreparedStatement ps = conn.prepareStatement("SELECT NAME FROM LOG_CATEGORY WHERE ID = ?")) {
+            for (LogRecord record : records) {
+                Long categoryId = record.logCategoryId;
+                if (categoryId == null) {
+                    continue;
+                }
+
+                if (cache.containsKey(categoryId)) {
+                    record.logCategoryName = cache.get(categoryId);
+                    continue;
+                }
+
+                ps.setLong(1, categoryId);
+                String name = null;
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        name = rs.getString(1);
+                    }
+                }
+
+                cache.put(categoryId, name);
+                record.logCategoryName = name;
+            }
+        }
+    }
+
     private Long getNullableLong(ResultSet rs, String column) throws Exception {
         long value = rs.getLong(column);
         return rs.wasNull() ? null : value;
@@ -451,6 +553,7 @@ public class OracleToolService {
             json.append("      \"createdUnixMs\": ").append(record.created == null ? "null" : toUnixMillis(record.created)).append(",\n");
             json.append("      \"logLevelId\": ").append(record.logLevelId == null ? "null" : record.logLevelId.toString()).append(",\n");
             json.append("      \"logCategoryId\": ").append(record.logCategoryId == null ? "null" : record.logCategoryId.toString()).append(",\n");
+            json.append("      \"logCategoryName\": ").append(record.logCategoryName == null ? "null" : "\"" + jsonEscape(record.logCategoryName) + "\"").append(",\n");
             json.append("      \"logSubCategory\": ").append(record.logSubCategory == null ? "null" : "\"" + jsonEscape(record.logSubCategory) + "\"").append(",\n");
             json.append("      \"entry\": ").append(record.entry == null ? "null" : "\"" + jsonEscape(record.entry) + "\"").append(",\n");
             json.append("      \"userDefId\": ").append(record.userDefId == null ? "null" : record.userDefId.toString()).append(",\n");
@@ -520,6 +623,14 @@ public class OracleToolService {
         return timestamp.toInstant().toEpochMilli();
     }
 
+    private static class ColumnDetail {
+        String name;
+        String dataType;
+        boolean nullable;
+        Integer dataLength;
+        boolean primaryKey;
+    }
+
     private static class LogEntrySummary {
         Long id;
         Timestamp created;
@@ -534,6 +645,7 @@ public class OracleToolService {
         Timestamp created;
         Long logLevelId;
         Long logCategoryId;
+        String logCategoryName;
         String logSubCategory;
         String entry;
         Long userDefId;
