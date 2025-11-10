@@ -18,6 +18,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Service;
@@ -36,6 +38,7 @@ import oracle.jdbc.pool.OracleDataSource;
 public class OracleToolService {
 
     private final OracleToolConfig oracleToolConfig;
+    private static final Logger log = LoggerFactory.getLogger(OracleToolService.class);
 
     /**
      * Constructor for OracleService
@@ -66,8 +69,9 @@ public class OracleToolService {
      *
      * @return JSON string describing available tables
      */
-    @Tool(name = "list_tables", description = "Get a list of all tables in Oracle database")
+    @Tool(name = "list_tables", description = "Get a list of all tables in CPP database")
     public String listTables() {
+        log.info("list_tables tool invoked");
         try (OracleConnection conn = getConnection();
                 Statement stmt = conn.createStatement();
                 ResultSet rs = stmt.executeQuery("SELECT table_name FROM user_tables ORDER BY table_name")) {
@@ -119,6 +123,7 @@ public class OracleToolService {
      */
     @Tool(name = "describe_table", description = "Get structure information of specified table in Oracle database")
     public String describeTable(@ToolParam(description = "Table name to describe") String tableName) {
+        log.info("describe_table tool invoked for tableName='{}'", abbreviateForLog(tableName));
         if (tableName == null || tableName.trim().isEmpty()) {
             return "Error: table name is required.";
         }
@@ -227,6 +232,7 @@ public class OracleToolService {
      */
     @Tool(name = "execute_sql", description = "Execute Oracle SQL statement")
     public String executeSql(@ToolParam(description = "SQL statement to execute") String sql) {
+        log.info("execute_sql tool invoked with sql='{}'", abbreviateForLog(sql));
         try {
             if (sql.trim().toUpperCase().startsWith("SELECT")) {
                 try (OracleConnection conn = getConnection();
@@ -285,6 +291,8 @@ public class OracleToolService {
             @ToolParam(description = "Component identifier to search") String compId,
             @ToolParam(description = "Exclusive upper bound timestamp (ISO8601)") String beforeIso,
             @ToolParam(description = "Maximum number of records to return; negative for all") int maxRecords) {
+        log.info("retrieve_log tool invoked with compId='{}', beforeIso='{}', maxRecords={}",
+                abbreviateForLog(compId), abbreviateForLog(beforeIso), maxRecords);
 
         if (compId == null || compId.trim().isEmpty()) {
             return "Error: comp_id is required.";
@@ -337,6 +345,7 @@ public class OracleToolService {
     @Tool(name = "summarize_log", description = "Summarize LOG entries for a component identifier")
     public String summarizeLog(
             @ToolParam(description = "Component identifier to summarize") String compId) {
+        log.info("summarize_log tool invoked with compId='{}'", abbreviateForLog(compId));
 
         if (compId == null || compId.trim().isEmpty()) {
             return "Error: comp_id is required.";
@@ -621,6 +630,18 @@ public class OracleToolService {
             return null;
         }
         return timestamp.toInstant().toEpochMilli();
+    }
+
+    private String abbreviateForLog(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        int maxLength = 200;
+        if (trimmed.length() <= maxLength) {
+            return trimmed;
+        }
+        return trimmed.substring(0, maxLength) + "...";
     }
 
     private static class ColumnDetail {
