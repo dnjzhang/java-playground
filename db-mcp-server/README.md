@@ -11,6 +11,29 @@ A Model Context Protocol (MCP) server implementation for Oracle database operati
 - Real-time communication via SSE
 - Built on spring-ai-mcp-server-webmvc-spring-boot-starter
 
+## Sample MCP Prompt (Java Code Review)
+
+A ready-to-use MCP prompt is exposed via `@McpPrompt` in `src/main/java/com/mcp/oracle/service/JavaCodeReviewPromptService.java`. It shows up in `prompts/list` as `java_code_review` and accepts arguments `diff` (required), `context`, and `tests`.
+
+Example `prompts/get` request body (stateless or SSE):
+
+```json
+{
+  "id": "1",
+  "method": "prompts/get",
+  "params": {
+    "name": "java_code_review",
+    "arguments": {
+      "diff": "--- a/Foo.java\\n+++ b/Foo.java\\n@@ ...",
+      "context": "New retry logic for Oracle writes.",
+      "tests": "Existing unit tests only; integration tests pending."
+    }
+  }
+}
+```
+
+The server responds with a `result.messages` array containing the system and user messages defined in the prompt, ready to forward to your model.
+
 ## Technology Stack
 
 ### Core Dependencies
