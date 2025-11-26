@@ -1,0 +1,13 @@
+server:
+  port: 8080
+spring:
+  application:
+    name: oracle-mcp-server
+  ai:
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      chat:
+        options:
+          model: ${OLLAMA_MODEL:llama3.2}
+          temperature: 0.1
+
