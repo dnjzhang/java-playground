@@ -24,8 +24,8 @@ mvn spring-boot:run
 ```
 The server starts on port 8080 with the MCP transport enabled.
 
-## Using the chatbot
-The `OllamaChatbotService` (`src/main/java/project/ollama/chat/service/OllamaChatbotService.java`) wraps `ChatClient` and is exposed over HTTP via `src/main/java/project/ollama/chat/controller/ChatController.java`. Example call:
+## Using the chatbot (Jersey)
+The `OllamaChatbotService` (`src/main/java/project/ollama/chat/service/OllamaChatbotService.java`) wraps `ChatClient` and is exposed via Jersey at `/chat` (`src/main/java/project/ollama/chat/controller/ChatController.java`). Example call:
 ```java
 String reply = ollamaChatbotService.chat("Summarize the latest release notes.");
 ```
