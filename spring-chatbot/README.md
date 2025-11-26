@@ -25,7 +25,11 @@ mvn spring-boot:run
 The server starts on port 8080 with the MCP transport enabled.
 
 ## Using the chatbot (Jersey)
-The `OllamaChatbotService` (`src/main/java/project/ollama/chat/service/OllamaChatbotService.java`) wraps `ChatClient` and is exposed via Jersey at `/chat` (`src/main/java/project/ollama/chat/controller/ChatController.java`). Example call:
+Two chat providers are exposed:
+- Ollama: POST `/chat/ollama`
+- OCI GenAI: POST `/chat/oci`
+
+`OllamaChatbotService` and `OciChatbotService` live under `src/main/java/project/ollama/chat/service/` and are wired through `ChatController` (`src/main/java/project/ollama/chat/controller/ChatController.java`). Example call:
 ```java
 String reply = ollamaChatbotService.chat("Summarize the latest release notes.");
 ```
@@ -35,14 +39,28 @@ Call the REST API with `curl`:
 curl -X POST \
   -H "Content-Type: text/plain" \
   --data "Summarize the latest release notes." \
-  http://localhost:8080/chat
+  http://localhost:8080/chat/ollama
 ```
 
 Or use the helper script (`chat.sh`):
 ```bash
 ./chat.sh "Summarize the latest release notes."
 ```
-You can override the host with `CHAT_HOST`, e.g. `CHAT_HOST=http://localhost:8080 ./chat.sh "Hi"`.
+Defaults target Ollama; use `CHAT_PROVIDER=oci` for OCI, and override host with `CHAT_HOST`:
+```bash
+CHAT_PROVIDER=oci CHAT_HOST=http://localhost:8080 ./chat.sh "Hi"
+```
+
+### OCI GenAI configuration (env or `application.yml`)
+Set properties for the OCI model, for example (file-based auth):
+```properties
+spring.ai.oci.genai.authenticationType=file
+spring.ai.oci.genai.file=/path/to/oci/config
+spring.ai.oci.genai.cohere.chat.options.compartment=ocid1.compartment...
+spring.ai.oci.genai.cohere.chat.options.servingMode=on-demand
+spring.ai.oci.genai.cohere.chat.options.model=ocid1.generativeAIModel...
+```
+Ollama remains configured under `spring.ai.ollama.*`. Each endpoint uses its dedicated ChatClient bean.
 
 ## Build & Test
 - Full build: `mvn clean package`

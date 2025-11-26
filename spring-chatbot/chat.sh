@@ -11,7 +11,8 @@ fi
 
 QUESTION="$*"
 HOST="${CHAT_HOST:-http://localhost:8080}"
-ENDPOINT="${HOST%/}/chat"
+PROVIDER="${CHAT_PROVIDER:-ollama}"
+ENDPOINT="${HOST%/}/chat/${PROVIDER}"
 
 curl -sS -X POST \
   -H "Content-Type: text/plain" \

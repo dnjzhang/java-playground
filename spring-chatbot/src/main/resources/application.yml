@@ -10,4 +10,25 @@ spring:
         options:
           model: ${OLLAMA_MODEL:llama3.2}
           temperature: 0.1
-
+    model:
+      chat: ${SPRING_AI_DEFAULT_CHAT:ollama}
+    oci:
+      genai:
+        # Authentication strategy: file | instance | resource_principal | security_token
+        authenticationType: ${OCI_GENAI_AUTH_TYPE:file}
+        # Path to OCI config file when using file-based auth
+        file: ${OCI_CONFIG_FILE:~/.oci/config}
+        # Optional profile name within the config file
+        profile: ${OCI_CONFIG_PROFILE:DEFAULT}
+        # Service endpoint override if needed
+        endpoint: ${OCI_GENAI_ENDPOINT:}
+        cohere:
+          chat:
+            options:
+              # OCI chat model OCID
+              model: ${OCI_GENAI_MODEL:}
+              # Compartment OCID containing the model
+              compartment: ${OCI_GENAI_COMPARTMENT:}
+              # on-demand | dedicated
+              servingMode: ${OCI_GENAI_SERVING_MODE:on-demand}
+              temperature: ${OCI_GENAI_TEMPERATURE:0.3}

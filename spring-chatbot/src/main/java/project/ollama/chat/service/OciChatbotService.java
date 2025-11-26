@@ -3,21 +3,23 @@ package project.ollama.chat.service;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 
 /**
- * Minimal Gen AI chatbot service backed by the configured Spring AI chat model (Ollama).
+ * OCI GenAI-backed chatbot service using the configured Spring AI chat model.
  */
 @Service
-public class OllamaChatbotService {
+@ConditionalOnBean(name = "ociChatClient")
+public class OciChatbotService {
 
     private final ChatClient chatClient;
 
-    public OllamaChatbotService(@Qualifier("ollamaChatClient") ChatClient ollamaChatClient) {
-        this.chatClient = ollamaChatClient;
+    public OciChatbotService(@Qualifier("ociChatClient") ChatClient ociChatClient) {
+        this.chatClient = ociChatClient;
     }
 
     /**
-     * Send a user message to the configured chat model and return the response text.
+     * Send a user message to the OCI GenAI chat model and return the response text.
      *
      * @param userMessage user input to send to the model
      * @return model response content
@@ -28,7 +30,7 @@ public class OllamaChatbotService {
         }
 
         return chatClient.prompt()
-                .system("You are a helpful knowledge assistant. Keep answers concise and actionable.")
+                .system("You are an OCI GenAI assistant. Keep answers concise and actionable.")
                 .user(userMessage.trim())
                 .call()
                 .content();
